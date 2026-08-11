@@ -7,7 +7,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from mixer import MixSession
-from mixer.constants import BYTES_PER_FRAME
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -38,8 +37,6 @@ async def publish(ws: WebSocket, device: str) -> None:
     try:
         while True:
             chunk = await ws.receive_bytes()
-            if len(chunk) != BYTES_PER_FRAME:
-                continue  # the mix stacks whole frames; drop anything else
             if not logged:
                 print(f"publish: device={device}, first chunk is {len(chunk)} bytes")
                 logged = True

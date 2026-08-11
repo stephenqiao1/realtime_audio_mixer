@@ -4,12 +4,9 @@ import time
 
 import numpy as np
 
+from mixer.buffer import JitterBuffer
 from mixer.constants import BYTES_PER_FRAME, DTYPE, FRAME_MS
 from mixer.mixing import mix_frames
-
-# A frame of all zeroes is silence: what a participant contributes on
-# any tick where no fresh audio arrived from them.
-SILENCE = bytes(BYTES_PER_FRAME)
 
 # One second of frames. A subscriber further behind than this is not
 # listening in any useful sense, so the bound also caps how stale any
@@ -18,25 +15,37 @@ QUEUE_MAX_FRAMES = 1000 // FRAME_MS
 
 
 class MixSession:
-    """Stores each device's latest frame; a clock mixes at 50 Hz and fans
+    """Buffers each device's incoming audio; a clock mixes at 50 Hz and fans
     the result out to subscriber queues without ever blocking on one."""
 
-    def __init__(self) -> None:
-        self._latest: dict[str, bytes | None] = {}
+    def __init__(self, target_depth: int = 3, max_depth: int = 10) -> None:
+        self._buffers: dict[str, JitterBuffer] = {}
+        self._pending: dict[str, bytes] = {}  # device -> partial-frame bytes
+        self._target_depth = target_depth
+        self._max_depth = max_depth
         self._subscribers: dict[asyncio.Queue, int] = {}  # queue -> frames dropped
         self._task: asyncio.Task | None = None
 
     def add_participant(self, device_id: str) -> None:
-        self._latest.setdefault(device_id, None)
+        self._buffers.setdefault(
+            device_id, JitterBuffer(self._target_depth, self._max_depth))
+        self._pending.setdefault(device_id, b"")
 
     def remove_participant(self, device_id: str) -> None:
-        self._latest.pop(device_id, None)
+        self._buffers.pop(device_id, None)
+        self._pending.pop(device_id, None)
 
     def push(self, device_id: str, audio: bytes) -> None:
-        self._latest[device_id] = audio
+        if device_id not in self._buffers:
+            self.add_participant(device_id)
+        data = self._pending[device_id] + audio
+        while len(data) >= BYTES_PER_FRAME:
+            self._buffers[device_id].push(data[:BYTES_PER_FRAME])
+            data = data[BYTES_PER_FRAME:]
+        self._pending[device_id] = data
 
     def participants(self) -> list[str]:
-        return list(self._latest)
+        return list(self._buffers)
 
     def subscribe(self) -> asyncio.Queue:
         queue = asyncio.Queue(maxsize=QUEUE_MAX_FRAMES)
@@ -85,10 +94,10 @@ class MixSession:
                 # now instead of firing a burst of catch-up ticks.
                 deadline = time.perf_counter()
             frames = []
-            for device_id, slot in self._latest.items():
-                # Clearing after the read is what makes a device that stopped
-                # sending contribute silence instead of its stale last frame.
-                frames.append(np.frombuffer(slot or SILENCE, dtype=DTYPE))
-                self._latest[device_id] = None
+            for buffer in self._buffers.values():
+                # An unprimed newcomer sits out until its cushion builds,
+                # so it starts smooth instead of underrunning immediately.
+                if buffer.prime():
+                    frames.append(np.frombuffer(buffer.pop(), dtype=DTYPE))
             self._publish(mix_frames(frames).tobytes())
             deadline += period

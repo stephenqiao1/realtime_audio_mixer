@@ -59,7 +59,8 @@ def test_stopped_device_does_not_repeat_its_last_frame():
     outputs = []
 
     async def main():
-        session = MixSession()
+        # depth 1: a single frame should prime immediately for this test
+        session = MixSession(target_depth=1)
         drainer = collect_from(session.subscribe(), outputs)
         session.add_participant("a")
         await session.start()
