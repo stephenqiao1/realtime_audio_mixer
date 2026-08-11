@@ -1,3 +1,4 @@
+"""Rooms: isolation, code hygiene, lifecycle, recordings outlive closure."""
 import asyncio
 import io
 import wave
@@ -15,6 +16,10 @@ def frame(value):
 
 
 def test_two_rooms_mix_independently():
+    """Audio pushed into room A must never appear in room B's output --
+    rooms are fully isolated sessions. Also pins case-insensitive lookup
+    returning the same room object.
+    """
     results = {}
 
     async def main():
@@ -49,12 +54,18 @@ def test_two_rooms_mix_independently():
 
 
 def test_get_room_on_unknown_code_raises():
+    """get_room never creates: an unknown code is an error surfaced at the
+    boundary, not a silently materialized empty room.
+    """
     mixer = AudioMixer()
     with pytest.raises(RoomNotFound):
         mixer.get_room("ZZZZ")
 
 
 def test_codes_are_unique_and_unambiguous_across_many_creates():
+    """200 creates: every code distinct, 4 characters, drawn only from the
+    alphabet with the lookalikes (O/0, I/1) removed.
+    """
     results = {}
 
     async def main():
@@ -70,6 +81,9 @@ def test_codes_are_unique_and_unambiguous_across_many_creates():
 
 
 def test_close_room_cancels_the_clock_task():
+    """Closing a room actually cancels its clock task (no orphaned 50 Hz
+    loops) and removes it from the registry.
+    """
     results = {}
 
     async def main():
@@ -86,6 +100,9 @@ def test_close_room_cancels_the_clock_task():
 
 
 def test_recording_survives_room_closure():
+    """WAV bytes extracted at stop time hold no reference to the session, so
+    a recording remains readable after its room is gone.
+    """
     results = {}
 
     async def main():
@@ -105,6 +122,9 @@ def test_recording_survives_room_closure():
 
 
 def test_last_participant_leaving_closes_the_room():
+    """leave_room turns off the lights: the room survives the first leaver
+    and closes exactly when the last participant departs.
+    """
     results = {}
 
     async def main():

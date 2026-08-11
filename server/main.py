@@ -1,8 +1,5 @@
-"""FastAPI mixer: rooms of participants, one bidirectional socket each.
-
-Each room's 50 Hz clock mixes its participants and fans the result out;
-text frames carry JSON control, binary frames carry audio.
-"""
+"""Transport layer over core/mixer: rooms over WebSockets, one socket per
+participant; binary frames are audio, text frames are JSON control."""
 import asyncio
 import json
 from contextlib import asynccontextmanager

@@ -1,3 +1,4 @@
+"""The 50 Hz clock: fixed output rate, silence substitution, no repeats."""
 import asyncio
 
 import numpy as np
@@ -22,6 +23,10 @@ def collect_from(queue, into):
 
 
 def test_clock_emits_fifty_frames_per_second():
+    """The clock runs for one second with no participants and still emits
+    ~50 frames (20 ms period): output rate is a property of the clock, not
+    of input arrival. +/-2 absorbs scheduler jitter.
+    """
     outputs = []
 
     async def main():
@@ -37,6 +42,10 @@ def test_clock_emits_fifty_frames_per_second():
 
 
 def test_silent_device_does_not_block_the_other():
+    """One participant pushes, the other never does. The talker's audio must
+    still come through: an empty slot substitutes silence instead of
+    stalling or gating the mix.
+    """
     outputs = []
 
     async def main():
@@ -56,6 +65,10 @@ def test_silent_device_does_not_block_the_other():
 
 
 def test_stopped_device_does_not_repeat_its_last_frame():
+    """A single pushed frame across ~10 ticks is heard exactly once, then
+    silence: slots are cleared on read, so a stalled device cannot loop its
+    stale last frame. depth 1 lets the lone frame prime immediately.
+    """
     outputs = []
 
     async def main():

@@ -1,4 +1,4 @@
-"""Per-participant session state and the frame clock. No I/O."""
+"""One room's live mixing engine: push() audio in, subscribe() to the mix."""
 import asyncio
 import time
 

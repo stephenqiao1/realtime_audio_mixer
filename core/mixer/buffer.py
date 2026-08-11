@@ -1,4 +1,4 @@
-"""A per-device cushion between an uneven producer and the steady clock."""
+"""Per-device jitter cushion: trades a little fixed latency for smooth audio."""
 from collections import deque
 
 from mixer.constants import BYTES_PER_FRAME

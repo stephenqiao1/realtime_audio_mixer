@@ -1,3 +1,4 @@
+"""Bounded-queue fan-out: equal delivery, isolated slowness, clean exit."""
 import asyncio
 
 import numpy as np
@@ -20,6 +21,9 @@ def drain(queue):
 
 
 def test_two_subscribers_both_receive_every_frame():
+    """Fan-out is a plain broadcast: every subscriber's queue receives the
+    identical frame sequence.
+    """
     results = {}
 
     async def main():
@@ -39,6 +43,11 @@ def test_two_subscribers_both_receive_every_frame():
 
 
 def test_stalled_subscriber_drops_frames_without_affecting_the_other():
+    """One subscriber never drains while the other keeps up, past the
+    50-frame bound. The stalled queue stays pinned at the bound with its
+    drops counted; the healthy one misses nothing -- slowness is isolated,
+    never shared.
+    """
     received = []
     results = {}
 
@@ -68,6 +77,10 @@ def test_stalled_subscriber_drops_frames_without_affecting_the_other():
 
 
 def test_unsubscribe_stops_delivery_and_the_loop_survives():
+    """After unsubscribe, that queue is frozen at its current size while the
+    clock keeps delivering to the remaining subscriber: deregistration is
+    clean and cannot take the loop down.
+    """
     results = {}
 
     async def main():

@@ -1,4 +1,4 @@
-"""Room registry: many independent MixSessions addressed by short codes."""
+"""Room registry and lifecycle. AudioMixer is the entry point for embedding."""
 import secrets
 
 from mixer.session import MixSession

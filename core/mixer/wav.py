@@ -1,4 +1,4 @@
-"""In-memory WAV encoding for 16 kHz mono 16-bit audio."""
+"""In-memory WAV encoding for 16 kHz mono 16-bit audio. No disk I/O."""
 import io
 import wave
 

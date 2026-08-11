@@ -1,4 +1,4 @@
-"""Pure audio mixing functions. No state, no I/O."""
+"""Pure mixing math: frame, sum with headroom, clip. No state, no I/O."""
 from typing import Iterator
 
 import numpy as np

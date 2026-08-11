@@ -1,3 +1,4 @@
+"""JitterBuffer and reframing: ordering, overflow, underruns, priming."""
 import asyncio
 
 import numpy as np
@@ -10,8 +11,12 @@ from mixer.constants import DTYPE, SAMPLES_PER_FRAME
 def frame(value):
     return np.full(SAMPLES_PER_FRAME, value, dtype=DTYPE).tobytes()
 
-
 def test_burst_then_empty_ticks_yield_all_frames_then_silence():
+    """A network burst delivers five frames at once, then nothing, while the
+    clock keeps popping. All five come out complete and in order (a single
+    slot would have kept only the last), then empty pops return counted
+    silence instead of blocking or repeating.
+    """
     buf = JitterBuffer()
     for value in range(1, 6):
         buf.push(frame(value))
@@ -22,6 +27,10 @@ def test_burst_then_empty_ticks_yield_all_frames_then_silence():
 
 
 def test_overflow_drops_the_oldest_frame_not_the_newest():
+    """Twelve frames into a 10-deep buffer: the two oldest are sacrificed
+    and counted. In real time the newest audio is the most valuable, so
+    overflow discards from the front.
+    """
     buf = JitterBuffer(max_depth=10)
     for value in range(12):
         buf.push(frame(value))
@@ -33,12 +42,21 @@ def test_overflow_drops_the_oldest_frame_not_the_newest():
 
 
 def test_pop_on_empty_returns_silence_and_counts_the_underrun():
+    """pop() never blocks and never raises -- the clock depends on that. An
+    empty buffer yields silence and the failure is observable as a counter,
+    not silent.
+    """
     buf = JitterBuffer()
     assert buf.pop() == SILENCE
     assert buf.underruns == 1
 
 
 def test_split_pushes_reassemble_into_exactly_two_frames():
+    """1280 bytes arrive as 1000 + 280 -- neither a whole number of frames.
+    The per-device accumulator must reframe them into exactly two whole,
+    ordered, uncorrupted frames. Runs the real clock (depth 1) and checks
+    what actually comes out.
+    """
     outputs = []
 
     async def main():
@@ -65,6 +83,10 @@ def test_split_pushes_reassemble_into_exactly_two_frames():
 
 
 def test_late_joiner_does_not_disturb_the_other_device():
+    """A device joins mid-stream and pushes one frame -- below the priming
+    cushion, so it must never become audible, and the steady device's
+    output must contain only its own values throughout.
+    """
     outputs = []
 
     async def main():

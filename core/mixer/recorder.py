@@ -1,4 +1,4 @@
-"""Accumulates the mixed stream for one participant's recording."""
+"""Accumulates the mixed stream for one recording; complete by design."""
 import time
 
 from mixer.wav import encode_wav
