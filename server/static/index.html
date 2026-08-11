@@ -7,22 +7,30 @@
 <body>
 <h1 id="title">Audio Mixer</h1>
 <p id="hint"></p>
+<p id="rate"></p>
+<p id="warning" style="color:#c00"></p>
 <button id="start">Start</button>
 <button id="stop" disabled>Stop</button>
+<div id="meter" style="width:240px;height:12px;border:1px solid #888;margin:8px 0;display:none">
+  <div id="meterFill" style="height:100%;width:0%;background:#3a3"></div>
+</div>
 <pre id="log"></pre>
 <script>
 'use strict';
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode');
-let freq = parseFloat(params.get('freq') || '440');
-if (!Number.isFinite(freq) || freq <= 0) freq = 440;
 
 const SAMPLE_RATE = 16000;      // must match mixer/constants.py
 const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
-const FRAME_MS = 20;
 
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+
+// Random suffix so two publish tabs don't collide in the server's per-device
+// state; override with ?device=<id>.
+const device = mode === 'publish'
+  ? (params.get('device') || 'mic-' + Math.random().toString(36).slice(2, 6))
+  : null;
 
 function log(msg) {
   document.getElementById('log').textContent += msg + '\n';
@@ -38,16 +46,6 @@ function wsUrl(path) {
   return proto + '://' + location.host + path;
 }
 
-// Float samples in [-1, 1] -> int16, the wire format.
-function floatToInt16(floats) {
-  const ints = new Int16Array(floats.length);
-  for (let i = 0; i < floats.length; i++) {
-    const s = Math.max(-1, Math.min(1, floats[i]));
-    ints[i] = s < 0 ? s * 32768 : s * 32767;
-  }
-  return ints;
-}
-
 function int16ToFloat(ints) {
   const floats = new Float32Array(ints.length);
   for (let i = 0; i < ints.length; i++) {
@@ -56,27 +54,84 @@ function int16ToFloat(ints) {
   return floats;
 }
 
+// Runs on the audio thread: accumulate the 128-sample blocks the worklet
+// receives into 320-sample frames, convert to int16, post each frame to the
+// main thread. Worklets have their own scope, so the float->int16 clamp is
+// defined here rather than shared with page code.
+const workletSource = `
+class FrameSender extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffer = new Float32Array(${SAMPLES_PER_FRAME});
+    this.filled = 0;
+  }
+  process(inputs) {
+    const input = inputs[0][0];
+    if (!input) return true;
+    let offset = 0;
+    while (offset < input.length) {
+      const take = Math.min(${SAMPLES_PER_FRAME} - this.filled, input.length - offset);
+      this.buffer.set(input.subarray(offset, offset + take), this.filled);
+      this.filled += take;
+      offset += take;
+      if (this.filled === ${SAMPLES_PER_FRAME}) {
+        const ints = new Int16Array(${SAMPLES_PER_FRAME});
+        for (let i = 0; i < ints.length; i++) {
+          const s = Math.max(-1, Math.min(1, this.buffer[i]));
+          ints[i] = s < 0 ? s * 32768 : s * 32767;
+        }
+        this.port.postMessage(ints.buffer, [ints.buffer]);
+        this.filled = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('frame-sender', FrameSender);
+`;
+const workletUrl = URL.createObjectURL(
+  new Blob([workletSource], { type: 'application/javascript' }));
+
 let ctx = null;
 let ws = null;
-let timer = null;
+let stream = null;
 
-function startPublish() {
-  const device = params.get('device') || 'tone-' + freq;
+function updateMeter(frame) {
+  let peak = 0;
+  for (let i = 0; i < frame.length; i++) {
+    const v = Math.abs(frame[i]);
+    if (v > peak) peak = v;
+  }
+  document.getElementById('meterFill').style.width = (peak / 32768 * 100) + '%';
+}
+
+async function startPublish() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  });
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   log('AudioContext sample rate: ' + ctx.sampleRate);
+  document.getElementById('rate').textContent =
+    'AudioContext: ' + ctx.sampleRate + ' Hz';
+  if (ctx.sampleRate !== SAMPLE_RATE) {
+    document.getElementById('warning').textContent =
+      'Warning: AudioContext runs at ' + ctx.sampleRate + ' Hz, not ' +
+      SAMPLE_RATE + ' Hz — audio is sent unresampled and will play at the wrong pitch.';
+  }
+  await ctx.audioWorklet.addModule(workletUrl);
   ws = new WebSocket(wsUrl('/ws/publish?device=' + encodeURIComponent(device)));
   ws.binaryType = 'arraybuffer';
-  let phase = 0;  // continuous across frames so the tone has no clicks
-  ws.onopen = () => {
-    log('publishing ' + freq + ' Hz as "' + device + '"');
-    timer = setInterval(() => {
-      const floats = new Float32Array(SAMPLES_PER_FRAME);
-      for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
-        floats[i] = 0.25 * Math.sin(2 * Math.PI * freq * phase++ / SAMPLE_RATE);
-      }
-      ws.send(floatToInt16(floats).buffer);  // 320 samples = 640 bytes
-    }, FRAME_MS);
+  ws.onopen = () => log('publishing as "' + device + '"');
+  const source = ctx.createMediaStreamSource(stream);
+  const sender = new AudioWorkletNode(ctx, 'frame-sender');
+  sender.port.onmessage = (event) => {
+    updateMeter(new Int16Array(event.data));
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
   };
+  source.connect(sender);
+  // The audio graph is only pulled if it reaches the destination; without
+  // this the worklet never runs. It writes no output, so nothing is audible.
+  sender.connect(ctx.destination);
 }
 
 function startMonitor() {
@@ -102,22 +157,35 @@ function startMonitor() {
 }
 
 function stop() {
-  if (timer) clearInterval(timer);
-  timer = null;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
   if (ws) ws.close();
   ws = null;
   if (ctx) ctx.close();
   ctx = null;
+  document.getElementById('meterFill').style.width = '0%';
   setRunning(false);
 }
 
 if (mode === 'publish' || mode === 'monitor') {
   document.getElementById('title').textContent = mode === 'publish'
-    ? 'Audio Mixer — publish ' + freq + ' Hz'
+    ? 'Audio Mixer — publish "' + device + '"'
     : 'Audio Mixer — monitor';
-  startBtn.onclick = () => {
-    (mode === 'publish' ? startPublish : startMonitor)();
-    setRunning(true);
+  if (mode === 'publish') {
+    document.getElementById('meter').style.display = 'block';
+  }
+  startBtn.onclick = async () => {
+    try {
+      if (mode === 'publish') {
+        await startPublish();
+      } else {
+        startMonitor();
+      }
+      setRunning(true);
+    } catch (err) {
+      log('start failed: ' + err);
+      stop();
+    }
   };
   stopBtn.onclick = stop;
 } else {

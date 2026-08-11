@@ -29,5 +29,5 @@ uvicorn server.main:app
 
 Then open:
 
-- <http://localhost:8000/?mode=publish> — sends a test tone (pick a pitch with `&freq=660`)
+- <http://localhost:8000/?mode=publish> — captures your microphone (name a tab with `&device=alice`)
 - <http://localhost:8000/?mode=monitor> — plays whatever publishers are sending
