@@ -1,5 +1,5 @@
 """FastAPI mixer: publishers fill per-device slots; the session's 50 Hz
-clock mixes them and broadcasts one stream to all monitors."""
+clock mixes them; each monitor drains its own subscriber queue."""
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,26 +11,12 @@ from mixer.constants import BYTES_PER_FRAME
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Connected monitor sockets and the one mixing session.
-# Module-level by design for this iteration.
-monitors: list[WebSocket] = []
+# The one mixing session. Module-level by design for this iteration.
 session = MixSession()
-
-
-async def broadcast(mixed: bytes) -> None:
-    for sock in list(monitors):
-        try:
-            await sock.send_bytes(mixed)
-        except RuntimeError:
-            # Monitor disconnected mid-send; drop it here since its own
-            # handler may still be blocked in receive.
-            if sock in monitors:
-                monitors.remove(sock)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    session.on_output(broadcast)
     await session.start()
     yield
     await session.close()
@@ -67,11 +53,14 @@ async def publish(ws: WebSocket, device: str) -> None:
 @app.websocket("/ws/monitor")
 async def monitor(ws: WebSocket) -> None:
     await ws.accept()
-    monitors.append(ws)
+    queue = session.subscribe()
     try:
         while True:
-            # Monitors never send data; this only waits for the disconnect.
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        if ws in monitors:
-            monitors.remove(ws)
+            await ws.send_bytes(await queue.get())
+    except (WebSocketDisconnect, RuntimeError):
+        # The clock always emits, so a dead socket fails a send within
+        # one tick; that failure is our disconnect signal now that the
+        # handler no longer sits in receive.
+        pass
+    finally:
+        session.unsubscribe(queue)

@@ -11,13 +11,19 @@ from mixer.mixing import mix_frames
 # any tick where no fresh audio arrived from them.
 SILENCE = bytes(BYTES_PER_FRAME)
 
+# One second of frames. A subscriber further behind than this is not
+# listening in any useful sense, so the bound also caps how stale any
+# delivered frame can be.
+QUEUE_MAX_FRAMES = 1000 // FRAME_MS
+
 
 class MixSession:
-    """Stores each device's latest frame; a clock mixes and emits at 50 Hz."""
+    """Stores each device's latest frame; a clock mixes at 50 Hz and fans
+    the result out to subscriber queues without ever blocking on one."""
 
     def __init__(self) -> None:
         self._latest: dict[str, bytes | None] = {}
-        self._on_output = None
+        self._subscribers: dict[asyncio.Queue, int] = {}  # queue -> frames dropped
         self._task: asyncio.Task | None = None
 
     def add_participant(self, device_id: str) -> None:
@@ -32,8 +38,28 @@ class MixSession:
     def participants(self) -> list[str]:
         return list(self._latest)
 
-    def on_output(self, callback) -> None:
-        self._on_output = callback
+    def subscribe(self) -> asyncio.Queue:
+        queue = asyncio.Queue(maxsize=QUEUE_MAX_FRAMES)
+        self._subscribers[queue] = 0
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue) -> None:
+        self._subscribers.pop(queue, None)
+
+    def dropped_frames(self, queue: asyncio.Queue) -> int:
+        return self._subscribers.get(queue, 0)
+
+    def _publish(self, mixed: bytes) -> None:
+        for queue in self._subscribers:
+            try:
+                queue.put_nowait(mixed)
+            except asyncio.QueueFull:
+                # Late audio is worthless in real time: sacrifice this
+                # subscriber's oldest frame, never block the clock. Only
+                # this subscriber loses data.
+                queue.get_nowait()
+                queue.put_nowait(mixed)
+                self._subscribers[queue] += 1
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
@@ -55,7 +81,7 @@ class MixSession:
             if delay > 0:
                 await asyncio.sleep(delay)
             else:
-                # Fell behind (slow callback, suspended machine): resync to
+                # Fell behind (suspended machine, slow tick): resync to
                 # now instead of firing a burst of catch-up ticks.
                 deadline = time.perf_counter()
             frames = []
@@ -64,7 +90,5 @@ class MixSession:
                 # sending contribute silence instead of its stale last frame.
                 frames.append(np.frombuffer(slot or SILENCE, dtype=DTYPE))
                 self._latest[device_id] = None
-            mixed = mix_frames(frames).tobytes()
-            if self._on_output is not None:
-                await self._on_output(mixed)
+            self._publish(mix_frames(frames).tobytes())
             deadline += period
