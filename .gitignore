@@ -1,14 +1,4 @@
-# Not part of the submission
-DECISIONS.md
-
-# Python
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
-
-# Local tool settings
-.claude/settings.local.json
-
-# Generated test audio, not part of the submission
-fixtures/
