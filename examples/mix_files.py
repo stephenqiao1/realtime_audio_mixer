@@ -17,12 +17,12 @@ def read_wav(path):
         return w.readframes(w.getnframes())
 
 
-def write_wav(path, pcm):
+def write_wav(path, audio):
     with wave.open(path, "wb") as w:
         w.setframerate(SAMPLE_RATE)
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.writeframes(pcm)
+        w.writeframes(audio)
 
 
 def main():

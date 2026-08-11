@@ -1,1 +1,1 @@
-"""Pure PCM mixing primitives."""
+"""Pure audio mixing primitives."""

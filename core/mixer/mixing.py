@@ -6,10 +6,10 @@ import numpy as np
 from mixer.constants import BYTES_PER_FRAME, DTYPE, SAMPLES_PER_FRAME
 
 
-def iter_frames(pcm: bytes) -> Iterator[np.ndarray]:
+def iter_frames(audio: bytes) -> Iterator[np.ndarray]:
     """Yield fixed-size int16 frames, zero-padding the final partial frame."""
-    for start in range(0, len(pcm), BYTES_PER_FRAME):
-        frame = np.frombuffer(pcm[start:start + BYTES_PER_FRAME], dtype=DTYPE)
+    for start in range(0, len(audio), BYTES_PER_FRAME):
+        frame = np.frombuffer(audio[start:start + BYTES_PER_FRAME], dtype=DTYPE)
         if len(frame) < SAMPLES_PER_FRAME:
             frame = np.pad(frame, (0, SAMPLES_PER_FRAME - len(frame))) # Pad with zeros to ensure the frame is the correct size
         yield frame
