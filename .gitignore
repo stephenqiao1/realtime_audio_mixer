@@ -1,0 +1,12 @@
+# Not part of the submission
+DECISIONS.md
+examples/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local tool settings
+.claude/settings.local.json
