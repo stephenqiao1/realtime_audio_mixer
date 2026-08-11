@@ -5,61 +5,41 @@
 <title>Audio Mixer</title>
 </head>
 <body>
-<h1 id="title">Audio Mixer</h1>
-<p id="hint"></p>
-<p id="rate"></p>
-<p id="warning" style="color:#c00"></p>
-<button id="start">Start</button>
-<button id="stop" disabled>Stop</button>
-<button id="record" style="display:none" disabled>Record</button>
-<div id="meter" style="width:240px;height:12px;border:1px solid #888;margin:8px 0;display:none">
-  <div id="meterFill" style="height:100%;width:0%;background:#3a3"></div>
+<h1>Audio Mixer</h1>
+<div id="lobby">
+  <button id="create">Create room</button>
+  <input id="codeInput" placeholder="CODE" maxlength="4" size="6">
+  <button id="join">Join</button>
 </div>
-<ul id="recordings"></ul>
+<div id="roomView" style="display:none">
+  <h2 id="roomTitle"></h2>
+  <p>In the room: <span id="participants"></span></p>
+  <p id="rate"></p>
+  <p id="warning" style="color:#c00"></p>
+  <button id="leave">Leave</button>
+  <button id="record">Record</button>
+  <div id="meter" style="width:240px;height:12px;border:1px solid #888;margin:8px 0">
+    <div id="meterFill" style="height:100%;width:0%;background:#3a3"></div>
+  </div>
+  <ul id="recordings"></ul>
+</div>
 <pre id="log"></pre>
 <script>
 'use strict';
 const params = new URLSearchParams(location.search);
-const mode = params.get('mode');
 
 const SAMPLE_RATE = 16000;      // must match mixer/constants.py
 const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
 
-const startBtn = document.getElementById('start');
-const stopBtn = document.getElementById('stop');
-const recordBtn = document.getElementById('record');
-let recording = false;
-
-// Random suffix so two publish tabs don't collide in the server's per-device
+// Random suffix so two tabs don't collide in the room's per-device
 // state; override with ?device=<id>.
-const device = mode === 'publish'
-  ? (params.get('device') || 'mic-' + Math.random().toString(36).slice(2, 6))
-  : null;
+const device = params.get('device') || 'mic-' + Math.random().toString(36).slice(2, 6);
+
+const codeInput = document.getElementById('codeInput');
+const recordBtn = document.getElementById('record');
 
 function log(msg) {
   document.getElementById('log').textContent += msg + '\n';
-}
-
-function setRunning(running) {
-  startBtn.disabled = running;
-  stopBtn.disabled = !running;
-  recordBtn.disabled = !running;
-  if (!running) {
-    // Stopping capture ends any recording server-side; reflect that here.
-    recording = false;
-    recordBtn.textContent = 'Record';
-  }
-}
-
-function addRecordingPlayer(id) {
-  const list = document.getElementById('recordings');
-  const item = document.createElement('li');
-  item.textContent = 'recording ' + (list.children.length + 1) + ' ';
-  const audio = document.createElement('audio');
-  audio.controls = true;
-  audio.src = '/recording/' + encodeURIComponent(id);
-  item.appendChild(audio);
-  list.appendChild(item);
 }
 
 function wsUrl(path) {
@@ -116,6 +96,9 @@ const workletUrl = URL.createObjectURL(
 let ctx = null;
 let ws = null;
 let stream = null;
+let playhead = 0;
+let roomCode = null;
+let recording = false;
 
 function updateMeter(frame) {
   let peak = 0;
@@ -126,7 +109,60 @@ function updateMeter(frame) {
   document.getElementById('meterFill').style.width = (peak / 32768 * 100) + '%';
 }
 
-async function startPublish() {
+function playFrame(buffer) {
+  const floats = int16ToFloat(new Int16Array(buffer));
+  const audioBuffer = ctx.createBuffer(1, floats.length, SAMPLE_RATE);
+  audioBuffer.copyToChannel(floats, 0);
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+  // Schedule chunks back to back; after a gap, restart slightly ahead
+  // of "now" so the next chunk is not already in the past.
+  playhead = Math.max(playhead, ctx.currentTime + 0.05);
+  source.start(playhead);
+  playhead += audioBuffer.duration;
+}
+
+function addRecordingPlayer(id) {
+  const list = document.getElementById('recordings');
+  const item = document.createElement('li');
+  item.textContent = 'recording ' + (list.children.length + 1) + ' ';
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.src = '/api/rooms/' + encodeURIComponent(roomCode) +
+              '/recordings/' + encodeURIComponent(id);
+  item.appendChild(audio);
+  list.appendChild(item);
+}
+
+function handleControl(msg) {
+  if (msg.event === 'join' || msg.event === 'leave') {
+    document.getElementById('participants').textContent = msg.participants.join(', ');
+    log(msg.event + ': ' + msg.device);
+  } else if (msg.event === 'recording') {
+    addRecordingPlayer(msg.recording_id);
+  }
+}
+
+function leaveRoom() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+  }
+  ws = null;
+  if (ctx) ctx.close();
+  ctx = null;
+  recording = false;
+  recordBtn.textContent = 'Record';
+  document.getElementById('meterFill').style.width = '0%';
+  document.getElementById('participants').textContent = '';
+  document.getElementById('roomView').style.display = 'none';
+  document.getElementById('lobby').style.display = 'block';
+}
+
+async function joinRoom(code) {
   stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
   });
@@ -140,12 +176,21 @@ async function startPublish() {
       SAMPLE_RATE + ' Hz — audio is sent unresampled and will play at the wrong pitch.';
   }
   await ctx.audioWorklet.addModule(workletUrl);
-  ws = new WebSocket(wsUrl('/ws/publish?device=' + encodeURIComponent(device)));
+  roomCode = code;
+  playhead = 0;
+  ws = new WebSocket(wsUrl('/ws/room/' + encodeURIComponent(code) +
+                           '?device=' + encodeURIComponent(device)));
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => log('publishing as "' + device + '"');
   ws.onmessage = (event) => {
-    // The only text the server sends a publisher is a finished recording id.
-    if (typeof event.data === 'string') addRecordingPlayer(event.data);
+    if (typeof event.data === 'string') {
+      handleControl(JSON.parse(event.data));
+    } else {
+      playFrame(event.data);
+    }
+  };
+  ws.onclose = (event) => {
+    if (event.code === 4404) log('unknown room: ' + code);
+    leaveRoom();
   };
   const source = ctx.createMediaStreamSource(stream);
   const sender = new AudioWorkletNode(ctx, 'frame-sender');
@@ -157,71 +202,52 @@ async function startPublish() {
   // The audio graph is only pulled if it reaches the destination; without
   // this the worklet never runs. It writes no output, so nothing is audible.
   sender.connect(ctx.destination);
+  document.getElementById('roomTitle').textContent = 'Room ' + code;
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('roomView').style.display = 'block';
 }
 
-function startMonitor() {
-  ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  log('AudioContext sample rate: ' + ctx.sampleRate);
-  ws = new WebSocket(wsUrl('/ws/monitor'));
-  ws.binaryType = 'arraybuffer';
-  let playhead = 0;
-  ws.onopen = () => log('monitoring');
-  ws.onmessage = (event) => {
-    const floats = int16ToFloat(new Int16Array(event.data));
-    const buffer = ctx.createBuffer(1, floats.length, SAMPLE_RATE);
-    buffer.copyToChannel(floats, 0);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    // Schedule chunks back to back; after a gap, restart slightly ahead
-    // of "now" so the next chunk is not already in the past.
-    playhead = Math.max(playhead, ctx.currentTime + 0.05);
-    source.start(playhead);
-    playhead += buffer.duration;
-  };
-}
-
-function stop() {
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = null;
-  if (ws) ws.close();
-  ws = null;
-  if (ctx) ctx.close();
-  ctx = null;
-  document.getElementById('meterFill').style.width = '0%';
-  setRunning(false);
-}
-
-if (mode === 'publish' || mode === 'monitor') {
-  document.getElementById('title').textContent = mode === 'publish'
-    ? 'Audio Mixer — publish "' + device + '"'
-    : 'Audio Mixer — monitor';
-  if (mode === 'publish') {
-    document.getElementById('meter').style.display = 'block';
-    recordBtn.style.display = 'inline';
-    recordBtn.onclick = () => {
-      recording = !recording;
-      recordBtn.textContent = recording ? 'Stop recording' : 'Record';
-      ws.send(recording ? 'record:start' : 'record:stop');
-    };
+document.getElementById('create').onclick = async () => {
+  try {
+    const resp = await fetch('/api/rooms', { method: 'POST' });
+    const body = await resp.json();
+    await joinRoom(body.room_code);
+  } catch (err) {
+    log('create failed: ' + err);
+    leaveRoom();
   }
-  startBtn.onclick = async () => {
-    try {
-      if (mode === 'publish') {
-        await startPublish();
-      } else {
-        startMonitor();
-      }
-      setRunning(true);
-    } catch (err) {
-      log('start failed: ' + err);
-      stop();
+};
+
+document.getElementById('join').onclick = async () => {
+  const code = codeInput.value.trim().toUpperCase();
+  if (!code) {
+    log('enter a room code first');
+    return;
+  }
+  try {
+    const resp = await fetch('/api/rooms/' + encodeURIComponent(code));
+    if (!resp.ok) {
+      log('no such room: ' + code);
+      return;
     }
-  };
-  stopBtn.onclick = stop;
-} else {
-  document.getElementById('hint').textContent = 'Open with ?mode=publish or ?mode=monitor';
-  startBtn.disabled = true;
+    await joinRoom(code);
+  } catch (err) {
+    log('join failed: ' + err);
+    leaveRoom();
+  }
+};
+
+document.getElementById('leave').onclick = leaveRoom;
+
+recordBtn.onclick = () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  recording = !recording;
+  recordBtn.textContent = recording ? 'Stop recording' : 'Record';
+  ws.send(recording ? 'record:start' : 'record:stop');
+};
+
+if (params.get('room')) {
+  codeInput.value = params.get('room').toUpperCase();
 }
 </script>
 </body>
