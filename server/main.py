@@ -4,21 +4,20 @@ Mixing happens synchronously on every chunk arrival -- no server clock yet.
 """
 from pathlib import Path
 
-import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from mixer.constants import BYTES_PER_FRAME, DTYPE
-from mixer.mixing import mix_frames
+from mixer import MixSession
+from mixer.constants import BYTES_PER_FRAME
 
 app = FastAPI()
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Connected monitor sockets and each publisher's most recent chunk.
+# Connected monitor sockets and the one mixing session.
 # Module-level by design for this iteration.
 monitors: list[WebSocket] = []
-latest: dict[str, bytes] = {}
+session = MixSession()
 
 
 @app.get("/")
@@ -29,18 +28,17 @@ async def index() -> FileResponse:
 @app.websocket("/ws/publish")
 async def publish(ws: WebSocket, device: str) -> None:
     await ws.accept()
+    session.add_participant(device)
     logged = False
     try:
         while True:
             chunk = await ws.receive_bytes()
             if len(chunk) != BYTES_PER_FRAME:
-                continue  # mix_frames stacks whole frames; drop anything else
+                continue  # the mix stacks whole frames; drop anything else
             if not logged:
                 print(f"publish: device={device}, first chunk is {len(chunk)} bytes")
                 logged = True
-            latest[device] = chunk
-            frames = [np.frombuffer(c, dtype=DTYPE) for c in latest.values()]
-            mixed = mix_frames(frames).tobytes()
+            mixed = session.push(device, chunk)
             for sock in list(monitors):
                 try:
                     await sock.send_bytes(mixed)
@@ -52,7 +50,7 @@ async def publish(ws: WebSocket, device: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        latest.pop(device, None)
+        session.remove_participant(device)
 
 
 @app.websocket("/ws/monitor")
