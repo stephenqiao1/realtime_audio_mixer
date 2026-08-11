@@ -69,13 +69,18 @@ async def recording(code: str, recording_id: str) -> Response:
 
 
 async def _receive_audio(ws: WebSocket, session: MixSession,
-                         code: str, device: str) -> None:
+                         code: str, device: str,
+                         queue: "asyncio.Queue") -> None:
     logged = False
     while True:
         message = await ws.receive()
         if message["type"] == "websocket.disconnect":
             raise WebSocketDisconnect(message.get("code", 1000))
-        if message.get("text") == "record:start":
+        if message.get("text") == "stats":
+            await ws.send_text(json.dumps(
+                {"event": "stats", "devices": session.stats(),
+                 "dropped": session.dropped_frames(queue)}))
+        elif message.get("text") == "record:start":
             session.start_recording(device)
         elif message.get("text") == "record:stop":
             recorder = session.stop_recording(device)
@@ -111,7 +116,7 @@ async def room_socket(ws: WebSocket, code: str, device: str) -> None:
     peers.setdefault(code, set()).add(ws)
     await broadcast_control(code, {"event": "join", "device": device,
                                    "participants": session.participants()})
-    receive = asyncio.create_task(_receive_audio(ws, session, code, device))
+    receive = asyncio.create_task(_receive_audio(ws, session, code, device, queue))
     send = asyncio.create_task(_send_mix(ws, queue))
     try:
         await asyncio.gather(receive, send)

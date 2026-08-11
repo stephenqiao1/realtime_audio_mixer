@@ -49,6 +49,12 @@ class MixSession:
     def participants(self) -> list[str]:
         return list(self._buffers)
 
+    def stats(self) -> dict[str, dict[str, int]]:
+        return {device: {"depth": buffer.depth,
+                         "underruns": buffer.underruns,
+                         "overruns": buffer.overruns}
+                for device, buffer in self._buffers.items()}
+
     def start_recording(self, device_id: str) -> None:
         # Starting over an unfinished recording abandons it: a new
         # recording is always a fresh Recorder, never a resume.

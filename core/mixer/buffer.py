@@ -31,6 +31,10 @@ class JitterBuffer:
             return SILENCE
         return self._frames.popleft()
 
+    @property
+    def depth(self) -> int:
+        return len(self._frames)
+
     def prime(self) -> bool:
         # Sticky: once the cushion has built up, the device stays eligible;
         # later starvation surfaces as underruns, not re-gating.

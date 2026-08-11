@@ -3,43 +3,105 @@
 <head>
 <meta charset="utf-8">
 <title>Audio Mixer</title>
+<style>
+:root {
+  --fg: #1a1a1a; --bg: #ffffff; --line: #999;
+  --muted: #667; --accent: #2563eb; --err: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6e6e6; --bg: #131313; --line: #555;
+    --muted: #99a; --accent: #60a5fa; --err: #f87171;
+  }
+}
+body {
+  color: var(--fg); background: var(--bg);
+  font-family: system-ui, sans-serif;
+  max-width: 40rem; margin: 2rem auto; padding: 0 1rem;
+}
+h1 { font-size: 1.25rem; }
+button {
+  background: none; border: 0.5px solid var(--line);
+  color: var(--fg); padding: 0.35rem 0.9rem; cursor: pointer;
+}
+button:disabled { opacity: 0.4; cursor: default; }
+input {
+  background: none; border: 0.5px solid var(--line);
+  color: var(--fg); padding: 0.35rem 0.5rem;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.row { display: flex; align-items: center; gap: 0.6rem; margin: 0.9rem 0; }
+.top { justify-content: space-between; }
+.error { color: var(--err); }
+.muted { color: var(--muted); }
+.meter { width: 10rem; height: 0.6rem; border: 0.5px solid var(--line); }
+.meter > div { height: 100%; width: 0%; background: var(--accent); }
+#statsDetail table { border-collapse: collapse; margin-top: 0.5rem; }
+#statsDetail th, #statsDetail td {
+  border: 0.5px solid var(--line); padding: 0.15rem 0.6rem; text-align: right;
+}
+#recordings { list-style: none; padding: 0; }
+#recordings li { display: flex; align-items: center; gap: 0.6rem; margin: 0.4rem 0; }
+summary { cursor: pointer; }
+#log { font-size: 0.8rem; }
+</style>
 </head>
 <body>
 <h1>Audio Mixer</h1>
-<div id="lobby">
-  <button id="create">Create room</button>
-  <input id="codeInput" placeholder="CODE" maxlength="4" size="6">
-  <button id="join">Join</button>
-</div>
-<div id="roomView" style="display:none">
-  <h2 id="roomTitle"></h2>
-  <p>In the room: <span id="participants"></span></p>
-  <p id="rate"></p>
-  <p id="warning" style="color:#c00"></p>
-  <button id="leave">Leave</button>
-  <button id="record">Record</button>
-  <div id="meter" style="width:240px;height:12px;border:1px solid #888;margin:8px 0">
-    <div id="meterFill" style="height:100%;width:0%;background:#3a3"></div>
+
+<div id="viewLobby">
+  <div class="row">
+    <label for="nameInput">Name</label>
+    <input id="nameInput" placeholder="your name" maxlength="24">
   </div>
+  <div class="row">
+    <button id="createBtn">Create room</button>
+    <span class="muted">or</span>
+    <input id="codeInput" class="mono" placeholder="CODE" maxlength="4" size="6"
+           autocapitalize="characters">
+    <button id="joinBtn">Join</button>
+  </div>
+  <p id="lobbyError" class="error"></p>
+</div>
+
+<div id="viewRoom" style="display:none">
+  <div class="row top">
+    <span>Room <strong id="roomCodeEl" class="mono"></strong>
+      <button id="copyBtn">copy</button></span>
+    <button id="leaveBtn">Leave</button>
+  </div>
+  <p id="connBanner" class="error" style="display:none">
+    disconnected <button id="rejoinBtn">Rejoin</button>
+    <span id="rejoinError"></span></p>
+  <div class="row">
+    <button id="recordBtn">Record</button>
+    <span class="muted">mic</span>
+    <div class="meter"><div id="micMeter"></div></div>
+  </div>
+  <div class="row">
+    <button id="playBtn">Pause</button>
+    <span class="muted">mix</span>
+    <div class="meter"><div id="mixMeter"></div></div>
+  </div>
+  <p>Devices: <span id="devicesEl" class="mono"></span></p>
+  <details>
+    <summary id="statsSummary" class="mono">0 fps · 0 drops</summary>
+    <div id="statsDetail"></div>
+  </details>
+  <p class="muted">Recordings</p>
   <ul id="recordings"></ul>
 </div>
-<pre id="log"></pre>
+
+<pre id="log" class="muted"></pre>
 <script>
 'use strict';
-const params = new URLSearchParams(location.search);
-
 const SAMPLE_RATE = 16000;      // must match mixer/constants.py
 const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
 
-// Random suffix so two tabs don't collide in the room's per-device
-// state; override with ?device=<id>.
-const device = params.get('device') || 'mic-' + Math.random().toString(36).slice(2, 6);
-
-const codeInput = document.getElementById('codeInput');
-const recordBtn = document.getElementById('record');
+const el = (id) => document.getElementById(id);
 
 function log(msg) {
-  document.getElementById('log').textContent += msg + '\n';
+  el('log').textContent += msg + '\n';
 }
 
 function wsUrl(path) {
@@ -53,6 +115,15 @@ function int16ToFloat(ints) {
     floats[i] = ints[i] / 32768;
   }
   return floats;
+}
+
+function setMeter(id, frame) {
+  let peak = 0;
+  for (let i = 0; i < frame.length; i++) {
+    const v = Math.abs(frame[i]);
+    if (v > peak) peak = v;
+  }
+  el(id).style.width = (peak / 32768 * 100) + '%';
 }
 
 // Runs on the audio thread: accumulate the 128-sample blocks the worklet
@@ -93,87 +164,124 @@ registerProcessor('frame-sender', FrameSender);
 const workletUrl = URL.createObjectURL(
   new Blob([workletSource], { type: 'application/javascript' }));
 
-let ctx = null;
-let ws = null;
-let stream = null;
+// State machine: lobby -> joining -> in-room -> left. One view at a time:
+// the room view only for in-room (connected or not), the lobby otherwise.
+let state = 'lobby';
+let connected = false;
+let ctx = null, ws = null, stream = null;
 let playhead = 0;
 let roomCode = null;
 let recording = false;
+let playing = true;
+let framesThisSecond = 0, fps = 0, statsTimer = null, recordingCount = 0;
 
-function updateMeter(frame) {
-  let peak = 0;
-  for (let i = 0; i < frame.length; i++) {
-    const v = Math.abs(frame[i]);
-    if (v > peak) peak = v;
+function setState(next) {
+  state = next;
+  el('viewLobby').style.display = state === 'in-room' ? 'none' : 'block';
+  el('viewRoom').style.display = state === 'in-room' ? 'block' : 'none';
+  el('createBtn').disabled = el('joinBtn').disabled = state === 'joining';
+  el('connBanner').style.display =
+    state === 'in-room' && !connected ? 'block' : 'none';
+}
+
+function deviceName() {
+  return el('nameInput').value.trim() ||
+         'mic-' + Math.random().toString(36).slice(2, 6);
+}
+
+function stopMedia() {
+  if (statsTimer) clearInterval(statsTimer);
+  statsTimer = null;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  if (ws) { ws.onclose = null; ws.close(); }
+  ws = null;
+  if (ctx) ctx.close();
+  ctx = null;
+  recording = false;
+  el('recordBtn').textContent = 'Record';
+  el('micMeter').style.width = '0%';
+  el('mixMeter').style.width = '0%';
+}
+
+function onSocketLost() {
+  // Unexpected close: hold the room view, offer rejoin. Never the lobby.
+  stopMedia();
+  connected = false;
+  setState('in-room');
+}
+
+function handleControl(msg) {
+  if (msg.event === 'join' || msg.event === 'leave') {
+    el('devicesEl').textContent = msg.participants.join(', ');
+    log(msg.event + ': ' + msg.device);
+  } else if (msg.event === 'recording') {
+    addRecording(msg.recording_id);
+  } else if (msg.event === 'stats') {
+    renderStats(msg);
   }
-  document.getElementById('meterFill').style.width = (peak / 32768 * 100) + '%';
+}
+
+function addRecording(id) {
+  recordingCount += 1;
+  const name = 'mixer-' + roomCode + '-' + recordingCount + '.wav';
+  const url = '/api/rooms/' + encodeURIComponent(roomCode) +
+              '/recordings/' + encodeURIComponent(id);
+  const item = document.createElement('li');
+  const label = document.createElement('span');
+  label.className = 'mono';
+  label.textContent = name;
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.src = url;
+  const save = document.createElement('a');
+  save.href = url;
+  save.download = name;
+  save.textContent = 'download';
+  item.append(label, audio, save);
+  el('recordings').prepend(item);  // newest first
+}
+
+function renderStats(msg) {
+  el('statsSummary').textContent = fps + ' fps · ' + msg.dropped + ' drops';
+  const rows = Object.entries(msg.devices).map(([device, s]) =>
+    '<tr><td class="mono" style="text-align:left">' + device + '</td>' +
+    '<td>' + s.depth + '</td><td>' + s.underruns + '</td>' +
+    '<td>' + s.overruns + '</td></tr>').join('');
+  el('statsDetail').innerHTML =
+    '<table><tr><th style="text-align:left">device</th><th>depth</th>' +
+    '<th>underruns</th><th>drops</th></tr>' + rows + '</table>';
 }
 
 function playFrame(buffer) {
-  const floats = int16ToFloat(new Int16Array(buffer));
+  const ints = new Int16Array(buffer);
+  framesThisSecond += 1;
+  if (!playing) {
+    el('mixMeter').style.width = '0%';
+    return;
+  }
+  setMeter('mixMeter', ints);
+  const floats = int16ToFloat(ints);
   const audioBuffer = ctx.createBuffer(1, floats.length, SAMPLE_RATE);
   audioBuffer.copyToChannel(floats, 0);
   const source = ctx.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(ctx.destination);
-  // Schedule chunks back to back; after a gap, restart slightly ahead
-  // of "now" so the next chunk is not already in the past.
+  // Back to back; after a gap, restart slightly ahead of "now" so the
+  // next chunk is not already in the past.
   playhead = Math.max(playhead, ctx.currentTime + 0.05);
   source.start(playhead);
   playhead += audioBuffer.duration;
 }
 
-function addRecordingPlayer(id) {
-  const list = document.getElementById('recordings');
-  const item = document.createElement('li');
-  item.textContent = 'recording ' + (list.children.length + 1) + ' ';
-  const audio = document.createElement('audio');
-  audio.controls = true;
-  audio.src = '/api/rooms/' + encodeURIComponent(roomCode) +
-              '/recordings/' + encodeURIComponent(id);
-  item.appendChild(audio);
-  list.appendChild(item);
-}
-
-function handleControl(msg) {
-  if (msg.event === 'join' || msg.event === 'leave') {
-    document.getElementById('participants').textContent = msg.participants.join(', ');
-    log(msg.event + ': ' + msg.device);
-  } else if (msg.event === 'recording') {
-    addRecordingPlayer(msg.recording_id);
-  }
-}
-
-function leaveRoom() {
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = null;
-  if (ws) {
-    ws.onclose = null;
-    ws.close();
-  }
-  ws = null;
-  if (ctx) ctx.close();
-  ctx = null;
-  recording = false;
-  recordBtn.textContent = 'Record';
-  document.getElementById('meterFill').style.width = '0%';
-  document.getElementById('participants').textContent = '';
-  document.getElementById('roomView').style.display = 'none';
-  document.getElementById('lobby').style.display = 'block';
-}
-
-async function joinRoom(code) {
+async function joinRoom(code, device) {
   stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
   });
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  log('AudioContext sample rate: ' + ctx.sampleRate);
-  document.getElementById('rate').textContent =
-    'AudioContext: ' + ctx.sampleRate + ' Hz';
   if (ctx.sampleRate !== SAMPLE_RATE) {
-    document.getElementById('warning').textContent =
-      'Warning: AudioContext runs at ' + ctx.sampleRate + ' Hz, not ' +
-      SAMPLE_RATE + ' Hz — audio is sent unresampled and will play at the wrong pitch.';
+    log('warning: AudioContext runs at ' + ctx.sampleRate + ' Hz, not ' +
+        SAMPLE_RATE + ' — audio is sent unresampled and will be mis-pitched');
   }
   await ctx.audioWorklet.addModule(workletUrl);
   roomCode = code;
@@ -188,67 +296,101 @@ async function joinRoom(code) {
       playFrame(event.data);
     }
   };
-  ws.onclose = (event) => {
-    if (event.code === 4404) log('unknown room: ' + code);
-    leaveRoom();
-  };
+  ws.onclose = onSocketLost;
   const source = ctx.createMediaStreamSource(stream);
   const sender = new AudioWorkletNode(ctx, 'frame-sender');
   sender.port.onmessage = (event) => {
-    updateMeter(new Int16Array(event.data));
+    setMeter('micMeter', new Int16Array(event.data));
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
   };
   source.connect(sender);
   // The audio graph is only pulled if it reaches the destination; without
   // this the worklet never runs. It writes no output, so nothing is audible.
   sender.connect(ctx.destination);
-  document.getElementById('roomTitle').textContent = 'Room ' + code;
-  document.getElementById('lobby').style.display = 'none';
-  document.getElementById('roomView').style.display = 'block';
+  statsTimer = setInterval(() => {
+    fps = framesThisSecond;
+    framesThisSecond = 0;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send('stats');
+  }, 1000);
+  el('roomCodeEl').textContent = code;
+  connected = true;
+  setState('in-room');
 }
 
-document.getElementById('create').onclick = async () => {
-  try {
-    const resp = await fetch('/api/rooms', { method: 'POST' });
-    const body = await resp.json();
-    await joinRoom(body.room_code);
-  } catch (err) {
-    log('create failed: ' + err);
-    leaveRoom();
-  }
-};
-
-document.getElementById('join').onclick = async () => {
-  const code = codeInput.value.trim().toUpperCase();
-  if (!code) {
-    log('enter a room code first');
-    return;
-  }
+async function tryJoin(code, errTarget, fallback) {
+  // fallback: where to land if the join fails — 'lobby' from the lobby,
+  // 'in-room' from the rejoin banner (never bounce a rejoiner to the lobby).
+  if (fallback === 'lobby') setState('joining');
+  el('rejoinBtn').disabled = true;
   try {
     const resp = await fetch('/api/rooms/' + encodeURIComponent(code));
     if (!resp.ok) {
-      log('no such room: ' + code);
+      el(errTarget).textContent = 'no such room: ' + code;
+      setState(fallback);
       return;
     }
-    await joinRoom(code);
+    await joinRoom(code, deviceName());
   } catch (err) {
-    log('join failed: ' + err);
-    leaveRoom();
+    el(errTarget).textContent = 'join failed: ' + err;
+    stopMedia();
+    setState(fallback);
+  } finally {
+    el('rejoinBtn').disabled = false;
+  }
+}
+
+el('createBtn').onclick = async () => {
+  el('lobbyError').textContent = '';
+  setState('joining');
+  try {
+    const resp = await fetch('/api/rooms', { method: 'POST' });
+    const body = await resp.json();
+    await joinRoom(body.room_code, deviceName());
+  } catch (err) {
+    el('lobbyError').textContent = 'create failed: ' + err;
+    setState('lobby');
   }
 };
 
-document.getElementById('leave').onclick = leaveRoom;
+el('joinBtn').onclick = () => {
+  el('lobbyError').textContent = '';
+  const code = el('codeInput').value.trim().toUpperCase();
+  if (code.length !== 4) {
+    el('lobbyError').textContent = 'room codes are 4 characters';
+    return;
+  }
+  tryJoin(code, 'lobbyError', 'lobby');
+};
 
-recordBtn.onclick = () => {
+el('rejoinBtn').onclick = () => {
+  el('rejoinError').textContent = '';
+  tryJoin(roomCode, 'rejoinError', 'in-room');
+};
+
+el('leaveBtn').onclick = () => {
+  stopMedia();
+  connected = false;
+  roomCode = null;
+  setState('left');  // renders the lobby; the name input keeps its value
+};
+
+el('copyBtn').onclick = () => {
+  navigator.clipboard.writeText(roomCode)
+    .then(() => log('room code copied'))
+    .catch(() => log('copy failed — code: ' + roomCode));
+};
+
+el('recordBtn').onclick = () => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   recording = !recording;
-  recordBtn.textContent = recording ? 'Stop recording' : 'Record';
+  el('recordBtn').textContent = recording ? 'Stop recording' : 'Record';
   ws.send(recording ? 'record:start' : 'record:stop');
 };
 
-if (params.get('room')) {
-  codeInput.value = params.get('room').toUpperCase();
-}
+el('playBtn').onclick = () => {
+  playing = !playing;
+  el('playBtn').textContent = playing ? 'Pause' : 'Play';
+};
 </script>
 </body>
 </html>
