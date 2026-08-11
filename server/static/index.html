@@ -11,9 +11,11 @@
 <p id="warning" style="color:#c00"></p>
 <button id="start">Start</button>
 <button id="stop" disabled>Stop</button>
+<button id="record" style="display:none" disabled>Record</button>
 <div id="meter" style="width:240px;height:12px;border:1px solid #888;margin:8px 0;display:none">
   <div id="meterFill" style="height:100%;width:0%;background:#3a3"></div>
 </div>
+<ul id="recordings"></ul>
 <pre id="log"></pre>
 <script>
 'use strict';
@@ -25,6 +27,8 @@ const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
 
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+const recordBtn = document.getElementById('record');
+let recording = false;
 
 // Random suffix so two publish tabs don't collide in the server's per-device
 // state; override with ?device=<id>.
@@ -39,6 +43,23 @@ function log(msg) {
 function setRunning(running) {
   startBtn.disabled = running;
   stopBtn.disabled = !running;
+  recordBtn.disabled = !running;
+  if (!running) {
+    // Stopping capture ends any recording server-side; reflect that here.
+    recording = false;
+    recordBtn.textContent = 'Record';
+  }
+}
+
+function addRecordingPlayer(id) {
+  const list = document.getElementById('recordings');
+  const item = document.createElement('li');
+  item.textContent = 'recording ' + (list.children.length + 1) + ' ';
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.src = '/recording/' + encodeURIComponent(id);
+  item.appendChild(audio);
+  list.appendChild(item);
 }
 
 function wsUrl(path) {
@@ -122,6 +143,10 @@ async function startPublish() {
   ws = new WebSocket(wsUrl('/ws/publish?device=' + encodeURIComponent(device)));
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => log('publishing as "' + device + '"');
+  ws.onmessage = (event) => {
+    // The only text the server sends a publisher is a finished recording id.
+    if (typeof event.data === 'string') addRecordingPlayer(event.data);
+  };
   const source = ctx.createMediaStreamSource(stream);
   const sender = new AudioWorkletNode(ctx, 'frame-sender');
   sender.port.onmessage = (event) => {
@@ -173,6 +198,12 @@ if (mode === 'publish' || mode === 'monitor') {
     : 'Audio Mixer — monitor';
   if (mode === 'publish') {
     document.getElementById('meter').style.display = 'block';
+    recordBtn.style.display = 'inline';
+    recordBtn.onclick = () => {
+      recording = !recording;
+      recordBtn.textContent = recording ? 'Stop recording' : 'Record';
+      ws.send(recording ? 'record:start' : 'record:stop');
+    };
   }
   startBtn.onclick = async () => {
     try {

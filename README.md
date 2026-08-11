@@ -29,5 +29,10 @@ uvicorn server.main:app
 
 Then open:
 
-- <http://localhost:8000/?mode=publish> — captures your microphone (name a tab with `&device=alice`)
+- <http://localhost:8000/?mode=publish> — captures your microphone (name a tab with `&device=alice`); the Record button captures the mixed stream and plays it back on the page
 - <http://localhost:8000/?mode=monitor> — plays whatever publishers are sending
+
+## Known limitations
+
+Recordings are held in server memory and never evicted; restarting the
+server clears them. Everything is one process and one shared room.

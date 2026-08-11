@@ -5,6 +5,7 @@ import time
 import numpy as np
 
 from mixer.buffer import JitterBuffer
+from mixer.recorder import Recorder
 from mixer.constants import BYTES_PER_FRAME, DTYPE, FRAME_MS
 from mixer.mixing import mix_frames
 
@@ -24,6 +25,7 @@ class MixSession:
         self._target_depth = target_depth
         self._max_depth = max_depth
         self._subscribers: dict[asyncio.Queue, int] = {}  # queue -> frames dropped
+        self._recorders: dict[str, Recorder] = {}  # device -> active recording
         self._task: asyncio.Task | None = None
 
     def add_participant(self, device_id: str) -> None:
@@ -46,6 +48,14 @@ class MixSession:
 
     def participants(self) -> list[str]:
         return list(self._buffers)
+
+    def start_recording(self, device_id: str) -> None:
+        # Starting over an unfinished recording abandons it: a new
+        # recording is always a fresh Recorder, never a resume.
+        self._recorders[device_id] = Recorder(device_id)
+
+    def stop_recording(self, device_id: str) -> Recorder | None:
+        return self._recorders.pop(device_id, None)
 
     def subscribe(self) -> asyncio.Queue:
         queue = asyncio.Queue(maxsize=QUEUE_MAX_FRAMES)
@@ -99,5 +109,10 @@ class MixSession:
                 # so it starts smooth instead of underrunning immediately.
                 if buffer.prime():
                     frames.append(np.frombuffer(buffer.pop(), dtype=DTYPE))
-            self._publish(mix_frames(frames).tobytes())
+            mixed = mix_frames(frames).tobytes()
+            for recorder in self._recorders.values():
+                # Synchronous and unbounded on purpose: recordings must be
+                # complete, unlike live playback which may drop.
+                recorder.append(mixed)
+            self._publish(mixed)
             deadline += period

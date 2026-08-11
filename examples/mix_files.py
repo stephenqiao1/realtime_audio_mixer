@@ -4,6 +4,7 @@ import wave
 
 from mixer.constants import SAMPLE_RATE
 from mixer.mixing import mix_streams
+from mixer.wav import encode_wav
 
 
 def read_wav(path):
@@ -18,11 +19,8 @@ def read_wav(path):
 
 
 def write_wav(path, audio):
-    with wave.open(path, "wb") as w:
-        w.setframerate(SAMPLE_RATE)
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.writeframes(audio)
+    with open(path, "wb") as f:
+        f.write(encode_wav(audio))
 
 
 def main():
