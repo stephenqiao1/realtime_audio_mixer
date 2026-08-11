@@ -60,6 +60,19 @@ async def room_info(code: str) -> dict:
     return {"exists": True}
 
 
+# Bundled sample voices for the simulator: allowlisted by name so the
+# route can never serve arbitrary paths.
+SAMPLES_DIR = STATIC_DIR / "samples"
+SAMPLE_FILES = {"speaker_a.wav", "speaker_b.wav"}
+
+
+@app.get("/samples/{name}")
+async def sample(name: str) -> FileResponse:
+    if name not in SAMPLE_FILES:
+        raise HTTPException(status_code=404, detail="unknown sample")
+    return FileResponse(SAMPLES_DIR / name, media_type="audio/wav")
+
+
 @app.get("/api/rooms/{code}/recordings/{recording_id}")
 async def recording(code: str, recording_id: str) -> Response:
     wav = recordings.get((code.upper(), recording_id))

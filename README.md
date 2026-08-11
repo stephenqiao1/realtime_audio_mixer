@@ -38,8 +38,9 @@ the LAN loads the page over plain HTTP, so its mic is blocked — pick the
 "Test file" audio source instead (it works over plain HTTP), or front the
 server with a tunnel or a self-signed certificate. The test-file source
 also lets two tabs on one machine demo a two-speaker conversation, since
-they would otherwise share the same microphone; any WAV works — it is
-resampled on decode.
+they would otherwise share the same microphone: two generated sample
+voices ship with the page (speaker_a / speaker_b — each pauses where the
+other talks), or pick any WAV — it is resampled on decode.
 
 ## Known limitations
 

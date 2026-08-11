@@ -80,6 +80,11 @@ summary { cursor: pointer; }
     <input type="file" id="fileInput" accept=".wav,audio/wav,audio/*"
            style="display:none">
   </div>
+  <div class="row" id="samplesRow" style="display:none">
+    <span class="muted">samples</span>
+    <button class="sampleBtn mono" data-name="speaker_a.wav">speaker_a.wav</button>
+    <button class="sampleBtn mono" data-name="speaker_b.wav">speaker_b.wav</button>
+  </div>
   <div class="row">
     <button id="recordBtn">Record</button>
     <span class="muted">mic</span>
@@ -290,6 +295,8 @@ function setSourceControlsEnabled(enabled) {
   document.querySelectorAll('input[name="source"]')
     .forEach((radio) => { radio.disabled = !enabled; });
   el('fileInput').disabled = !enabled;
+  document.querySelectorAll('.sampleBtn')
+    .forEach((btn) => { btn.disabled = !enabled; });
 }
 
 async function startMic() {
@@ -355,6 +362,7 @@ async function applySource(kind) {
   stopFileStream();
   sourceKind = kind;
   el('fileInput').style.display = kind === 'file' ? 'inline' : 'none';
+  el('samplesRow').style.display = kind === 'file' ? 'flex' : 'none';
   el('micMeter').style.width = '0%';
   if (!ws) return;
   if (kind === 'mic') {
@@ -479,6 +487,32 @@ el('playBtn').onclick = () => {
 
 document.querySelectorAll('input[name="source"]').forEach((radio) => {
   radio.onchange = () => applySource(radio.value);
+});
+
+document.querySelectorAll('.sampleBtn').forEach((btn) => {
+  btn.onclick = async () => {
+    if (!ctx) {
+      log('join a room before loading a sample');
+      return;
+    }
+    try {
+      const resp = await fetch('/samples/' + btn.dataset.name);
+      if (!resp.ok) {
+        log('sample unavailable: HTTP ' + resp.status);
+        return;
+      }
+      fileBuffer = await ctx.decodeAudioData(await resp.arrayBuffer());
+      filePos = 0;
+      log('loaded sample ' + btn.dataset.name +
+          ' (' + fileBuffer.duration.toFixed(1) + 's)');
+      if (sourceKind === 'file') {
+        stopFileStream();
+        startFileStream();
+      }
+    } catch (err) {
+      log('sample load failed: ' + err);
+    }
+  };
 });
 
 el('fileInput').onchange = async () => {
