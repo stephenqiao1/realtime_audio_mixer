@@ -14,6 +14,8 @@
 'use strict';
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode');
+let freq = parseFloat(params.get('freq') || '440');
+if (!Number.isFinite(freq) || freq <= 0) freq = 440;
 
 const SAMPLE_RATE = 16000;      // must match mixer/constants.py
 const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
@@ -59,8 +61,6 @@ let ws = null;
 let timer = null;
 
 function startPublish() {
-  let freq = parseFloat(params.get('freq') || '440');
-  if (!Number.isFinite(freq) || freq <= 0) freq = 440;
   const device = params.get('device') || 'tone-' + freq;
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   log('AudioContext sample rate: ' + ctx.sampleRate);
@@ -112,7 +112,9 @@ function stop() {
 }
 
 if (mode === 'publish' || mode === 'monitor') {
-  document.getElementById('title').textContent = 'Audio Mixer — ' + mode;
+  document.getElementById('title').textContent = mode === 'publish'
+    ? 'Audio Mixer — publish ' + freq + ' Hz'
+    : 'Audio Mixer — monitor';
   startBtn.onclick = () => {
     (mode === 'publish' ? startPublish : startMonitor)();
     setRunning(true);
