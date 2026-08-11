@@ -74,6 +74,13 @@ summary { cursor: pointer; }
     disconnected <button id="rejoinBtn">Rejoin</button>
     <span id="rejoinError"></span></p>
   <div class="row">
+    <span class="muted">source</span>
+    <label><input type="radio" name="source" value="mic" checked> Microphone</label>
+    <label><input type="radio" name="source" value="file"> Test file</label>
+    <input type="file" id="fileInput" accept=".wav,audio/wav,audio/*"
+           style="display:none">
+  </div>
+  <div class="row">
     <button id="recordBtn">Record</button>
     <span class="muted">mic</span>
     <div class="meter"><div id="micMeter"></div></div>
@@ -97,6 +104,7 @@ summary { cursor: pointer; }
 'use strict';
 const SAMPLE_RATE = 16000;      // must match mixer/constants.py
 const SAMPLES_PER_FRAME = 320;  // 20 ms at 16 kHz
+const FRAME_MS = 20;
 
 const el = (id) => document.getElementById(id);
 
@@ -174,6 +182,9 @@ let roomCode = null;
 let recording = false;
 let playing = true;
 let framesThisSecond = 0, fps = 0, statsTimer = null, recordingCount = 0;
+let sourceKind = 'mic';
+let micChain = null;
+let fileBuffer = null, filePos = 0, fileTimer = null;
 
 function setState(next) {
   state = next;
@@ -192,14 +203,15 @@ function deviceName() {
 function stopMedia() {
   if (statsTimer) clearInterval(statsTimer);
   statsTimer = null;
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = null;
+  stopMic();
+  stopFileStream();
   if (ws) { ws.onclose = null; ws.close(); }
   ws = null;
   if (ctx) ctx.close();
   ctx = null;
   recording = false;
   el('recordBtn').textContent = 'Record';
+  setSourceControlsEnabled(true);
   el('micMeter').style.width = '0%';
   el('mixMeter').style.width = '0%';
 }
@@ -274,10 +286,91 @@ function playFrame(buffer) {
   playhead += audioBuffer.duration;
 }
 
-async function joinRoom(code, device) {
+function setSourceControlsEnabled(enabled) {
+  document.querySelectorAll('input[name="source"]')
+    .forEach((radio) => { radio.disabled = !enabled; });
+  el('fileInput').disabled = !enabled;
+}
+
+async function startMic() {
   stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
   });
+  const source = ctx.createMediaStreamSource(stream);
+  const sender = new AudioWorkletNode(ctx, 'frame-sender');
+  sender.port.onmessage = (event) => {
+    setMeter('micMeter', new Int16Array(event.data));
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
+  };
+  source.connect(sender);
+  // The audio graph is only pulled if it reaches the destination; without
+  // this the worklet never runs. It writes no output, so nothing is audible.
+  sender.connect(ctx.destination);
+  micChain = { source, sender };
+}
+
+function stopMic() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  if (micChain) {
+    micChain.source.disconnect();
+    micChain.sender.disconnect();
+    micChain = null;
+  }
+}
+
+function startFileStream() {
+  if (!fileBuffer) {
+    log('pick a WAV file to stream');
+    return;
+  }
+  const samples = fileBuffer.getChannelData(0);
+  // Absolute deadline like the server clock: late ticks resync instead of
+  // bursting, and error never accumulates the way setInterval drifts.
+  let deadline = performance.now() + FRAME_MS;
+  const pump = () => {
+    const frame = new Int16Array(SAMPLES_PER_FRAME);
+    for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
+      const s = Math.max(-1, Math.min(1, samples[(filePos + i) % samples.length]));
+      frame[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    filePos = (filePos + SAMPLES_PER_FRAME) % samples.length;  // loop at EOF
+    setMeter('micMeter', frame);
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame.buffer);
+    deadline += FRAME_MS;
+    const delay = deadline - performance.now();
+    if (delay < 0) deadline = performance.now();
+    fileTimer = setTimeout(pump, Math.max(0, delay));
+  };
+  fileTimer = setTimeout(pump, FRAME_MS);
+}
+
+function stopFileStream() {
+  if (fileTimer) clearTimeout(fileTimer);
+  fileTimer = null;
+}
+
+async function applySource(kind) {
+  stopMic();
+  stopFileStream();
+  sourceKind = kind;
+  el('fileInput').style.display = kind === 'file' ? 'inline' : 'none';
+  el('micMeter').style.width = '0%';
+  if (!ws) return;
+  if (kind === 'mic') {
+    try {
+      await startMic();
+    } catch (err) {
+      // Plain-HTTP LAN pages cannot use the mic; joining still succeeds so
+      // the test-file source stays reachable.
+      log('microphone unavailable (' + err + ') — try the Test file source');
+    }
+  } else {
+    startFileStream();
+  }
+}
+
+async function joinRoom(code, device) {
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   if (ctx.sampleRate !== SAMPLE_RATE) {
     log('warning: AudioContext runs at ' + ctx.sampleRate + ' Hz, not ' +
@@ -297,16 +390,7 @@ async function joinRoom(code, device) {
     }
   };
   ws.onclose = onSocketLost;
-  const source = ctx.createMediaStreamSource(stream);
-  const sender = new AudioWorkletNode(ctx, 'frame-sender');
-  sender.port.onmessage = (event) => {
-    setMeter('micMeter', new Int16Array(event.data));
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
-  };
-  source.connect(sender);
-  // The audio graph is only pulled if it reaches the destination; without
-  // this the worklet never runs. It writes no output, so nothing is audible.
-  sender.connect(ctx.destination);
+  await applySource(sourceKind);
   statsTimer = setInterval(() => {
     fps = framesThisSecond;
     framesThisSecond = 0;
@@ -384,12 +468,41 @@ el('recordBtn').onclick = () => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   recording = !recording;
   el('recordBtn').textContent = recording ? 'Stop recording' : 'Record';
+  setSourceControlsEnabled(!recording);  // source is fixed while recording
   ws.send(recording ? 'record:start' : 'record:stop');
 };
 
 el('playBtn').onclick = () => {
   playing = !playing;
   el('playBtn').textContent = playing ? 'Pause' : 'Play';
+};
+
+document.querySelectorAll('input[name="source"]').forEach((radio) => {
+  radio.onchange = () => applySource(radio.value);
+});
+
+el('fileInput').onchange = async () => {
+  const file = el('fileInput').files[0];
+  if (!file) return;
+  if (!ctx) {
+    log('join a room before picking a file');
+    return;
+  }
+  try {
+    // decodeAudioData resamples to the context rate (16 kHz), so any WAV
+    // the browser can decode arrives in our wire format.
+    fileBuffer = await ctx.decodeAudioData(await file.arrayBuffer());
+  } catch (err) {
+    log('could not decode ' + file.name + ': ' + err);
+    return;
+  }
+  filePos = 0;
+  log('loaded ' + file.name + ' (' + fileBuffer.duration.toFixed(1) + 's' +
+      (fileBuffer.numberOfChannels > 1 ? ', using first channel' : '') + ')');
+  if (sourceKind === 'file') {
+    stopFileStream();
+    startFileStream();
+  }
 };
 </script>
 </body>

@@ -24,14 +24,22 @@ python examples/mix_files.py input1.wav input2.wav output.wav
 
 ```
 pip install fastapi "uvicorn[standard]"
-uvicorn server.main:app
+uvicorn server.main:app --host 0.0.0.0
 ```
 
 Then open <http://localhost:8000/> in each participant's browser: create a
-room in one tab and join it from the others with its 4-character code
-(works across machines on one network; name a tab with `?device=alice`).
-Everyone in a room hears the live mix; the Record button captures it and
-plays it back on the page. Wear headphones.
+room in one tab and join it from the others with its 4-character code.
+Other devices on your network can join at your machine's LAN address.
+Everyone in a room hears the live mix; the Record button captures it,
+listed on the page with playback and download. Wear headphones.
+
+Browsers allow microphone capture only on HTTPS or localhost. A phone on
+the LAN loads the page over plain HTTP, so its mic is blocked — pick the
+"Test file" audio source instead (it works over plain HTTP), or front the
+server with a tunnel or a self-signed certificate. The test-file source
+also lets two tabs on one machine demo a two-speaker conversation, since
+they would otherwise share the same microphone; any WAV works — it is
+resampled on decode.
 
 ## Known limitations
 
