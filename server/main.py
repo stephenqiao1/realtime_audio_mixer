@@ -24,6 +24,7 @@ recordings: dict[tuple[str, str], bytes] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """On shutdown, close every open room so no clock task outlives us."""
     yield
     for code in list(mixer.rooms):
         await mixer.close_room(code)
@@ -33,6 +34,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 async def broadcast_control(code: str, payload: dict) -> None:
+    """Send one JSON control message to every socket in a room."""
     for sock in list(peers.get(code, ())):
         try:
             await sock.send_text(json.dumps(payload))
@@ -42,16 +44,19 @@ async def broadcast_control(code: str, payload: dict) -> None:
 
 @app.get("/")
 async def index() -> FileResponse:
+    """Serve the single-page test simulator."""
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.post("/api/rooms")
 async def create_room() -> dict:
+    """Create a room and return its join code."""
     return {"room_code": await mixer.create_room()}
 
 
 @app.get("/api/rooms/{code}")
 async def room_info(code: str) -> dict:
+    """Existence check used by the join flow: 200 or 404, nothing more."""
     if not mixer.room_exists(code):
         raise HTTPException(status_code=404, detail="unknown room code")
     return {"exists": True}
@@ -65,6 +70,7 @@ SAMPLE_FILES = {"speaker_a.wav", "speaker_b.wav"}
 
 @app.get("/samples/{name}")
 async def sample(name: str) -> FileResponse:
+    """Serve one of the bundled sample voices by exact name."""
     if name not in SAMPLE_FILES:
         raise HTTPException(status_code=404, detail="unknown sample")
     return FileResponse(SAMPLES_DIR / name, media_type="audio/wav")
@@ -72,6 +78,7 @@ async def sample(name: str) -> FileResponse:
 
 @app.get("/api/rooms/{code}/recordings/{recording_id}")
 async def recording(code: str, recording_id: str) -> Response:
+    """Serve a finished recording as WAV; works after its room is gone."""
     wav = recordings.get((code.upper(), recording_id))
     if wav is None:
         raise HTTPException(status_code=404, detail="unknown recording")
@@ -81,6 +88,8 @@ async def recording(code: str, recording_id: str) -> Response:
 async def _receive_audio(ws: WebSocket, session: MixSession,
                          code: str, device: str,
                          queue: "asyncio.Queue") -> None:
+    """Half of a participant's socket: read text as control commands and
+    binary as audio pushed into the room. Raises on disconnect."""
     logged = False
     while True:
         message = await ws.receive()
@@ -108,12 +117,15 @@ async def _receive_audio(ws: WebSocket, session: MixSession,
 
 
 async def _send_mix(ws: WebSocket, queue: asyncio.Queue) -> None:
+    """The other half: drain this participant's queue onto the socket."""
     while True:
         await ws.send_bytes(await queue.get())
 
 
 @app.websocket("/ws/room/{code}")
 async def room_socket(ws: WebSocket, code: str, device: str) -> None:
+    """A participant's whole life in a room: validate the code, join and
+    announce, run receive+send concurrently, then clean up everything."""
     await ws.accept()
     try:
         session = mixer.get_room(code)
