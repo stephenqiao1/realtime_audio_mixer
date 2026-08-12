@@ -36,8 +36,18 @@ input {
 .top { justify-content: space-between; }
 .error { color: var(--err); }
 .muted { color: var(--muted); }
-.meter { width: 10rem; height: 0.6rem; border: 0.5px solid var(--line); }
+.meter { flex: 1; max-width: 14rem; height: 0.6rem; border: 0.5px solid var(--line); }
 .meter > div { height: 100%; width: 0%; background: var(--accent); }
+.panel { border: 0.5px solid var(--line); padding: 0.9rem 1rem; margin: 1rem 0; }
+.panel-title {
+  font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 0.6rem;
+}
+.panel .row:first-of-type { margin-top: 0; }
+.panel .row:last-child, .panel p:last-child { margin-bottom: 0; }
+#recordBtn, #playBtn { min-width: 9.5rem; }
+.lbl { width: 2.2rem; }
+.hint { font-size: 0.85rem; margin: 0.7rem 0 0; }
 #statsDetail table { border-collapse: collapse; margin-top: 0.5rem; }
 #statsDetail th, #statsDetail td {
   border: 0.5px solid var(--line); padding: 0.15rem 0.6rem; text-align: right;
@@ -52,18 +62,20 @@ summary { cursor: pointer; }
 <h1>Audio Mixer</h1>
 
 <div id="viewLobby">
-  <div class="row">
-    <label for="nameInput">Name</label>
-    <input id="nameInput" placeholder="your name" maxlength="24">
+  <div class="panel">
+    <div class="row">
+      <label for="nameInput">Name</label>
+      <input id="nameInput" placeholder="your name" maxlength="24">
+    </div>
+    <div class="row">
+      <button id="createBtn">Create room</button>
+      <span class="muted">or</span>
+      <input id="codeInput" class="mono" placeholder="CODE" maxlength="4" size="6"
+             autocapitalize="characters">
+      <button id="joinBtn">Join</button>
+    </div>
+    <p id="lobbyError" class="error"></p>
   </div>
-  <div class="row">
-    <button id="createBtn">Create room</button>
-    <span class="muted">or</span>
-    <input id="codeInput" class="mono" placeholder="CODE" maxlength="4" size="6"
-           autocapitalize="characters">
-    <button id="joinBtn">Join</button>
-  </div>
-  <p id="lobbyError" class="error"></p>
 </div>
 
 <div id="viewRoom" style="display:none">
@@ -75,35 +87,48 @@ summary { cursor: pointer; }
   <p id="connBanner" class="error" style="display:none">
     disconnected <button id="rejoinBtn">Rejoin</button>
     <span id="rejoinError"></span></p>
-  <div class="row">
-    <span class="muted">source</span>
-    <label><input type="radio" name="source" value="mic" checked> Microphone</label>
-    <label><input type="radio" name="source" value="file"> Test file</label>
-    <input type="file" id="fileInput" accept=".wav,audio/wav,audio/*"
-           style="display:none">
+
+  <div class="panel">
+    <div class="panel-title">Your audio</div>
+    <div class="row">
+      <span class="muted lbl">source</span>
+      <label><input type="radio" name="source" value="mic" checked> Microphone</label>
+      <label><input type="radio" name="source" value="file"> Test file</label>
+      <input type="file" id="fileInput" accept=".wav,audio/wav,audio/*"
+             style="display:none">
+    </div>
+    <div class="row" id="samplesRow" style="display:none">
+      <span class="muted lbl">samples</span>
+      <button class="sampleBtn mono" data-name="speaker_a.wav">speaker_a.wav</button>
+      <button class="sampleBtn mono" data-name="speaker_b.wav">speaker_b.wav</button>
+    </div>
+    <div class="row">
+      <button id="recordBtn">Record</button>
+      <span class="muted lbl">level</span>
+      <div class="meter"><div id="micMeter"></div></div>
+    </div>
+    <p class="muted hint">No second device? Open another tab, choose Test file
+    and load a sample voice.</p>
   </div>
-  <div class="row" id="samplesRow" style="display:none">
-    <span class="muted">samples</span>
-    <button class="sampleBtn mono" data-name="speaker_a.wav">speaker_a.wav</button>
-    <button class="sampleBtn mono" data-name="speaker_b.wav">speaker_b.wav</button>
+
+  <div class="panel">
+    <div class="panel-title">Room mix</div>
+    <div class="row">
+      <button id="playBtn">Pause</button>
+      <span class="muted lbl">level</span>
+      <div class="meter"><div id="mixMeter"></div></div>
+    </div>
+    <p>Devices: <span id="devicesEl" class="mono"></span></p>
+    <details>
+      <summary id="statsSummary" class="mono">0 fps · 0 drops</summary>
+      <div id="statsDetail"></div>
+    </details>
   </div>
-  <div class="row">
-    <button id="recordBtn">Record</button>
-    <span class="muted">mic</span>
-    <div class="meter"><div id="micMeter"></div></div>
+
+  <div class="panel">
+    <div class="panel-title">Recordings</div>
+    <ul id="recordings"></ul>
   </div>
-  <div class="row">
-    <button id="playBtn">Pause</button>
-    <span class="muted">mix</span>
-    <div class="meter"><div id="mixMeter"></div></div>
-  </div>
-  <p>Devices: <span id="devicesEl" class="mono"></span></p>
-  <details>
-    <summary id="statsSummary" class="mono">0 fps · 0 drops</summary>
-    <div id="statsDetail"></div>
-  </details>
-  <p class="muted">Recordings</p>
-  <ul id="recordings"></ul>
 </div>
 
 <pre id="log" class="muted"></pre>
