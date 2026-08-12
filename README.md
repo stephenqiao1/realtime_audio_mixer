@@ -12,9 +12,7 @@ live monitoring, playback and recording.
 │  (browser)   │  │  (browser)   │  │  (browser)   │     local WAV, or bundled sample
 └───────┬──────┘  └───────┬──────┘  └───────┬──────┘     voice, and hears the live mix
         └─────────────────┼─────────────────┘
-                          │  one WebSocket per participant:
-                          │  binary frames = audio (640 B / 20 ms)
-                          │  text frames   = JSON control
+                          │  one WebSocket per participant
                           ▼
 ┌───────────────────────────────────────────────────────────────────────┐
 │ server/main.py — transport layer: moves bytes and JSON, no audio      │
