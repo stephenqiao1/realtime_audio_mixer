@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mixer"
 version = "0.1.0"
-description = "Offline audio mixing (first iteration of a realtime mixer)"
+description = "Real-time audio mixing: rooms, jitter buffers, a 50 Hz mix clock"
 requires-python = ">=3.10"
 dependencies = ["numpy"]
 
