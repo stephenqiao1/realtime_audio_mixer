@@ -1,8 +1,8 @@
 # Realtime Audio Mixer
 
 Rooms of devices stream 16 kHz mono 16-bit audio over WebSockets; each
-room's 50 Hz clock mixes its participants into one unified stream for
-live monitoring, playback and recording.
+room's 50 Hz clock mixes them into one unified stream for live
+monitoring, playback and recording.
 
 ## Architecture
 
@@ -40,39 +40,37 @@ live monitoring, playback and recording.
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-Three rules hold the design together: all mixing state lives in the
-core and all I/O lives outside it; the 50 Hz clock — not input
-arrival — decides when output exists, so the rate never depends on how
-many devices are talking; and every consumer is either live (bounded
-queue, may drop) or a recording (unbounded, never drops), never an
-unbounded middle ground.
+Three rules hold the design together:
 
-## Run everything
+- Mixing state lives in the core; all I/O lives outside it.
+- The clock decides when output exists — never input arrival.
+- Consumers are live (bounded queue, may drop) or recordings
+  (unbounded, never drop). Nothing in between.
+
+## Quick start
 
 ```
 ./run.sh
 ```
 
-Creates a local virtualenv, installs the core package and server
-dependencies, runs the test suite, and starts the server on port 8000
-(pick another with `PORT=8001 ./run.sh`). macOS and Linux; on Windows,
-run it inside WSL or follow Manual setup.
+Creates a venv, installs dependencies, runs the tests, starts the
+server. macOS/Linux; on Windows use WSL or the manual setup.
 
-Then open <http://localhost:8000/> in each participant's browser: create a
-room in one tab and join it from the others with its 4-character code.
-Other devices on your network can join at your machine's LAN address
-(printed by the script). Everyone in a room hears the live mix; the
-Record button captures it, listed on the page with playback and download.
-Wear headphones.
+- Different port: `PORT=8001 ./run.sh`
+- Other devices on your network: use the LAN address the script prints
 
-Browsers allow microphone capture only on HTTPS or localhost. A phone on
-the LAN loads the page over plain HTTP, so its mic is blocked — pick the
-"Test file" audio source instead (it works over plain HTTP), or front the
-server with a tunnel or a self-signed certificate. The test-file source
-also lets two tabs on one machine demo a two-speaker conversation, since
-they would otherwise share the same microphone: two generated sample
-voices ship with the page (speaker_a / speaker_b — each pauses where the
-other talks), or pick any WAV — it is resampled on decode.
+## Demo
+
+1. Open <http://localhost:8000/> in two tabs.
+2. Tab 1: **Create room**. Tab 2: type the code, **Join**.
+3. In each tab pick source **Test file**, then a different sample
+   voice. You hear both speakers mixed live.
+4. **Record** captures the mix; it appears under Recordings with
+   playback and download.
+
+Microphone instead: browsers allow it only on HTTPS or localhost, so
+phones on plain-HTTP LAN must use the Test file source. Wear
+headphones — the mix includes your own voice.
 
 ## Manual setup
 
@@ -82,22 +80,16 @@ pytest core/tests
 uvicorn server.main:app --host 0.0.0.0 --port 8000
 ```
 
-Then open <http://localhost:8000/> (not the 0.0.0.0 address uvicorn
-prints). If the port is taken, uvicorn exits with "address already in
-use" — pick another with `--port`.
+Open <http://localhost:8000/>. Port taken? Pick another with `--port`.
 
 ## Using the core as a library
 
-The mixing engine is a standalone Python package (numpy is its only
-dependency) — the server above is just one transport wrapped around it.
+The engine is a standalone package (numpy only); the server is just one
+transport around it.
 
 ```
 pip install "git+https://github.com/stephenqiao1/realtime_audio_mixer.git#subdirectory=core"
 ```
-
-(or from a checkout: `pip install path/to/core`)
-
-Create a room, push audio in, subscribe to the mix:
 
 ```python
 import asyncio
@@ -119,24 +111,18 @@ async def main():
 asyncio.run(main())
 ```
 
-Jitter buffering, the fixed-rate output clock, silence substitution for
-stalled devices and per-room isolation all happen behind `push()` and
-`subscribe()`. For a complete capture rather than a live stream, use
-`room.start_recording(device)` and `room.stop_recording(device).to_wav()`
-— recordings never drop frames, while subscriber queues drop for
-consumers that fall more than a second behind, because live audio must
-not back up (`room.stats()` and `room.dropped_frames(queue)` expose
-both sides).
-
-Two rules bind the caller: audio is 16 kHz mono 16-bit int16
-(`mixer.constants` is the contract), and all calls belong to one asyncio
-event loop — the core uses no threads and no locks. To integrate from
-another language, run the server as a sidecar and speak its WebSocket
-protocol instead; `server/main.py` is the reference for wrapping the
-core in any transport.
+- Jitter buffering, the fixed-rate clock, silence for stalled devices
+  and room isolation all happen behind `push()` and `subscribe()`.
+- Live queues drop when a consumer falls a second behind; recordings
+  (`start_recording` / `stop_recording(...).to_wav()`) never drop.
+  `room.stats()` and `room.dropped_frames(queue)` expose both.
+- Two rules: audio is 16 kHz mono int16 (`mixer.constants` is the
+  contract), and everything runs on one asyncio event loop.
+- From other languages: run the server as a sidecar and speak its
+  WebSocket protocol; `server/main.py` is the reference transport.
 
 ## Known limitations
 
-Recordings are held in server memory and never evicted; restarting the
-server clears them. Everything runs in one process. The mix you hear
-includes your own voice (no per-participant mix-minus yet).
+Recordings live in server memory (cleared on restart), everything runs
+in one process, and the mix includes your own voice — no
+per-participant mix-minus yet.
