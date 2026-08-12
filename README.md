@@ -4,6 +4,51 @@ Rooms of devices stream 16 kHz mono 16-bit audio over WebSockets; each
 room's 50 Hz clock mixes its participants into one unified stream for
 live monitoring, playback and recording.
 
+## Architecture
+
+```text
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐     the test simulator: each
+│   device A   │  │   device B   │  │   device N   │     participant streams a mic,
+│  (browser)   │  │  (browser)   │  │  (browser)   │     local WAV, or bundled sample
+└───────┬──────┘  └───────┬──────┘  └───────┬──────┘     voice, and hears the live mix
+        └─────────────────┼─────────────────┘
+                          │  one WebSocket per participant:
+                          │  binary frames = audio (640 B / 20 ms)
+                          │  text frames   = JSON control
+                          ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ server/main.py — transport layer: moves bytes and JSON, no audio      │
+│ logic in this file                                                    │
+│   WS   /ws/room/{code}   receive loop → push() · send loop ← queue    │
+│   HTTP create/check rooms · serve recordings · sample voices · page   │
+└─────────────────────────────┬─────────────────────────────────────────┘
+                              │  direct python calls
+┌─────────────────────────────▼─────────────────────────────────────────┐
+│ core/mixer — pip-installable library · no I/O · numpy only            │
+│                                                                       │
+│   AudioMixer ── 4-char room code ──► MixSession (one per room)        │
+│                                                                       │
+│   push(device, bytes)                                                 │
+│     └─► byte accumulator ──► JitterBuffer per device                  │
+│                              (primes at 60 ms, bounded at 200 ms)     │
+│   50 Hz clock, absolute deadlines                                     │
+│     └─► pop every buffer ──► mix_frames(): sum in int32, clip         │
+│            │                                                          │
+│            ├─► subscriber queues — bounded, drop-oldest (live)        │
+│            └─► recorders — never drop, complete ──► WAV bytes         │
+│                                                                       │
+│   built on: mixing.py (pure math) · constants.py (the 16 kHz mono     │
+│   16-bit / 20 ms contract) · wav.py (in-memory WAV encoding)          │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+Three rules hold the design together: all mixing state lives in the
+core and all I/O lives outside it; the 50 Hz clock — not input
+arrival — decides when output exists, so the rate never depends on how
+many devices are talking; and every consumer is either live (bounded
+queue, may drop) or a recording (unbounded, never drops), never an
+unbounded middle ground.
+
 ## Run everything
 
 ```
