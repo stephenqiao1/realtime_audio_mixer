@@ -79,8 +79,12 @@ other talks), or pick any WAV — it is resampled on decode.
 ```
 pip install -e "core[dev]" fastapi "uvicorn[standard]"
 pytest core/tests
-uvicorn server.main:app --host 0.0.0.0
+uvicorn server.main:app --host 0.0.0.0 --port 8000
 ```
+
+Then open <http://localhost:8000/> (not the 0.0.0.0 address uvicorn
+prints). If the port is taken, uvicorn exits with "address already in
+use" — pick another with `--port`.
 
 ## Using the core as a library
 

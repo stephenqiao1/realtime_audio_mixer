@@ -8,6 +8,12 @@ cd "$(dirname "$0")"
 PYTHON=${PYTHON:-python3}
 PORT=${PORT:-8000}
 
+if ! "$PYTHON" -c "import socket; s = socket.socket(); s.bind(('0.0.0.0', $PORT))" 2>/dev/null; then
+  echo "Port $PORT is already in use by another program." >&2
+  echo "Pick a free one:  PORT=8001 ./run.sh" >&2
+  exit 1
+fi
+
 if [ ! -d .venv ]; then
   echo "Creating virtualenv..."
   "$PYTHON" -m venv .venv
