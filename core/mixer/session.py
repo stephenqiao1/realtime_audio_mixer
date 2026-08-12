@@ -29,7 +29,7 @@ class MixSession:
         self._task: asyncio.Task | None = None
 
     def add_participant(self, device_id: str) -> None:
-        """Register a device: fresh jitter buffer and byte carry. Idempotent."""
+        """Register a device: fresh jitter buffer and byte carry."""
         self._buffers.setdefault(
             device_id, JitterBuffer(self._target_depth, self._max_depth))
         self._pending.setdefault(device_id, b"")
