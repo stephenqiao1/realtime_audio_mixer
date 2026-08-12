@@ -39,6 +39,55 @@ pytest core/tests
 uvicorn server.main:app --host 0.0.0.0
 ```
 
+## Using the core as a library
+
+The mixing engine is a standalone Python package (numpy is its only
+dependency) — the server above is just one transport wrapped around it.
+
+```
+pip install "git+https://github.com/stephenqiao1/realtime_audio_mixer.git#subdirectory=core"
+```
+
+(or from a checkout: `pip install path/to/core`)
+
+Create a room, push audio in, subscribe to the mix:
+
+```python
+import asyncio
+from mixer import AudioMixer
+
+async def main():
+    mixer = AudioMixer()
+    code = await mixer.create_room()    # starts the room's 50 Hz clock
+    room = mixer.get_room(code)
+
+    room.add_participant("device-a")
+    room.push("device-a", audio_bytes)  # 16 kHz mono 16-bit, any chunk size
+
+    queue = room.subscribe()
+    mixed_frame = await queue.get()     # one 640-byte frame every 20 ms
+
+    await mixer.close_room(code)
+
+asyncio.run(main())
+```
+
+Jitter buffering, the fixed-rate output clock, silence substitution for
+stalled devices and per-room isolation all happen behind `push()` and
+`subscribe()`. For a complete capture rather than a live stream, use
+`room.start_recording(device)` and `room.stop_recording(device).to_wav()`
+— recordings never drop frames, while subscriber queues drop for
+consumers that fall more than a second behind, because live audio must
+not back up (`room.stats()` and `room.dropped_frames(queue)` expose
+both sides).
+
+Two rules bind the caller: audio is 16 kHz mono 16-bit int16
+(`mixer.constants` is the contract), and all calls belong to one asyncio
+event loop — the core uses no threads and no locks. To integrate from
+another language, run the server as a sidecar and speak its WebSocket
+protocol instead; `server/main.py` is the reference for wrapping the
+core in any transport.
+
 ## Known limitations
 
 Recordings are held in server memory and never evicted; restarting the
